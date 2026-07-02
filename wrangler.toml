@@ -1,0 +1,6 @@
+name = "hermes"                    # 改成你的 Worker 名称
+main = "src/worker.js"
+compatibility_date = "2026-07-02"        # 用当前日期或较新日期
+
+[vars]
+# 如果有环境变量可以在这里写（Secrets 建议用 Dashboard 设置）
