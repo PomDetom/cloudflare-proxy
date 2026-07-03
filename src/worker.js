@@ -3,20 +3,13 @@ export default {
     const url = new URL(request.url);
     const pathname = url.pathname;
 
-    // 判断是否是 OpenAI 兼容路径
+    // 判断是否为 OpenAI 兼容路径（你当前用的就是这种）
     const isOpenAIPath = pathname.includes('/openai/') || pathname.startsWith('/v1/');
 
-    let targetUrl;
+    // 目标地址
+    const targetUrl = `https://generativelanguage.googleapis.com${pathname}${url.search}`;
 
-    if (isOpenAIPath) {
-      // 使用 Google 官方 OpenAI 兼容端点
-      targetUrl = 'https://generativelanguage.googleapis.com' + pathname + url.search;
-    } else {
-      // 原生 Gemini 路径
-      targetUrl = 'https://generativelanguage.googleapis.com' + pathname + url.search;
-    }
-
-    // 复制并清理请求头
+    // 清理请求头
     const headers = new Headers(request.headers);
     headers.delete('host');
     headers.delete('cf-ray');
@@ -28,39 +21,49 @@ export default {
 
     let body = request.body;
 
-    // 只对 chat/completions 请求做特殊处理（解决 thinking_config 问题）
+    // 只处理 chat/completions 请求
     if (pathname.endsWith('/chat/completions') && request.method === 'POST') {
       try {
-        const originalBody = await request.text();
-        let jsonBody = JSON.parse(originalBody);
+        const text = await request.text();
+        let json = JSON.parse(text);
 
-        // === 核心修复：thinking_config 参数转换 ===
-        if (jsonBody.thinking_config) {
-          jsonBody.generationConfig = jsonBody.generationConfig || {};
-          jsonBody.generationConfig.thinkingConfig = jsonBody.thinking_config;
-          delete jsonBody.thinking_config;
-        }
+        // === 核心修复：thinking_config 规范化 ===
+        let thinkingConfig = null;
 
-        // 支持 Hermes 常见的 extra_body.google.thinking_config 写法
-        if (jsonBody.extra_body?.google?.thinking_config) {
-          jsonBody.generationConfig = jsonBody.generationConfig || {};
-          jsonBody.generationConfig.thinkingConfig = jsonBody.extra_body.google.thinking_config;
-          delete jsonBody.extra_body.google.thinking_config;
+        if (json.thinking_config) {
+          thinkingConfig = json.thinking_config;
+          delete json.thinking_config;
+        } else if (json.extra_body?.google?.thinking_config) {
+          thinkingConfig = json.extra_body.google.thinking_config;
+          delete json.extra_body.google.thinking_config;
 
-          // 如果 extra_body.google 为空则删除
-          if (Object.keys(jsonBody.extra_body.google).length === 0) {
-            delete jsonBody.extra_body.google;
+          // 清理空的 extra_body.google
+          if (Object.keys(json.extra_body.google || {}).length === 0) {
+            delete json.extra_body.google;
           }
-          if (Object.keys(jsonBody.extra_body).length === 0) {
-            delete jsonBody.extra_body;
+          if (json.extra_body && Object.keys(json.extra_body).length === 0) {
+            delete json.extra_body;
           }
         }
 
-        body = JSON.stringify(jsonBody);
+        // 如果有 thinking_config，统一放到 OpenAI 兼容路径推荐的位置
+        if (thinkingConfig) {
+          if (isOpenAIPath) {
+            // OpenAI 兼容路径推荐结构
+            json.extra_body = json.extra_body || {};
+            json.extra_body.google = json.extra_body.google || {};
+            json.extra_body.google.thinking_config = thinkingConfig;
+          } else {
+            // 原生 Gemini 路径
+            json.generationConfig = json.generationConfig || {};
+            json.generationConfig.thinkingConfig = thinkingConfig;
+          }
+        }
+
+        body = JSON.stringify(json);
         headers.set('Content-Type', 'application/json');
       } catch (e) {
-        console.error('Body parse error:', e);
-        // 解析失败就使用原始 body
+        console.error('Body processing error:', e);
       }
     }
 
@@ -68,28 +71,18 @@ export default {
       method: request.method,
       headers: headers,
       body: body,
-      redirect: 'follow',
     });
 
-    try {
-      const response = await fetch(newRequest);
+    const response = await fetch(newRequest);
 
-      // 可选：添加 CORS 头（如果前端需要）
-      const newHeaders = new Headers(response.headers);
-      newHeaders.set('Access-Control-Allow-Origin', '*');
-      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      newHeaders.set('Access-Control-Allow-Headers', '*');
+    // 添加 CORS（按需保留）
+    const newHeaders = new Headers(response.headers);
+    newHeaders.set('Access-Control-Allow-Origin', '*');
 
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: newHeaders,
-      });
-    } catch (error) {
-      return new Response(
-        JSON.stringify({ error: 'Proxy error', message: error.message }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: newHeaders,
+    });
   },
 };
