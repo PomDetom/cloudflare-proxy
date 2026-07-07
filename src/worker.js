@@ -6,8 +6,15 @@ export default {
     // 判断是否为 OpenAI 兼容路径（你当前用的就是这种）
     const isOpenAIPath = pathname.includes('/openai/') || pathname.startsWith('/v1/');
 
+    // 路径重写：标准 OpenAI SDK 路径 → Google OpenAI 兼容路径
+    // 例如 /v1/chat/completions → /v1beta/openai/chat/completions
+    let targetPath = pathname;
+    if (pathname.startsWith('/v1/') && !pathname.startsWith('/v1beta/')) {
+      targetPath = `/v1beta/openai${pathname.slice(3)}`;  // 去掉 /v1 前缀
+    }
+
     // 目标地址
-    const targetUrl = `https://generativelanguage.googleapis.com${pathname}${url.search}`;
+    const targetUrl = `https://generativelanguage.googleapis.com${targetPath}${url.search}`;
 
     // 清理请求头
     const headers = new Headers(request.headers);
